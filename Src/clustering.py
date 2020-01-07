@@ -105,3 +105,98 @@ from sklearn.cluster import KMeans
 import numpy as np
 
 kmeans = KMeans(n_clusters=10, random_state=0).fit(frecuency_matrix)
+
+################################# CLUSTERING OF RECEIPES ########################################
+import matplotlib.pyplot as plt
+
+import pandas as pd
+import numpy as np
+import re
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
+from sklearn.metrics.pairwise import euclidean_distances
+from sklearn.decomposition import TruncatedSVD
+
+RECEIPES_FILE = 'Data/recipe-ingredients-dataset/train.json'
+
+receipes_df = pd.read_json(RECEIPES_FILE)
+receipes_df.head()
+
+unique_ingredients = set()
+for row in receipes_df['ingredients']:
+        unique_ingredients.update(row)
+unique_ingredients = list(unique_ingredients)
+len(unique_ingredients)
+
+#receipes_df['ingredients_string'] = [' '.join(z).strip() for z in receipes_df['ingredients']]
+#receipes_df['ingredients_string_x'] = [[re.sub('[^A-Za-z- ]', '', line).strip().lower() for line in lists] for lists in receipes_df['ingredients']]
+
+receipes_df['ingredients_numbers'] = [[unique_ingredients.index(line) for line in lists] for lists in receipes_df['ingredients']]
+receipes_df['ingredients_numbers_x'] = [str(z).replace(',', '').strip('\[').strip('\]') for z in receipes_df['ingredients_numbers']]
+receipes_df.drop("ingredients", inplace=True, axis=1)
+
+vectorizer = TfidfVectorizer(analyzer="word", min_df=.01,
+                             max_df = .6 , binary=False , token_pattern=r'\w+' , sublinear_tf=False)
+
+corpustr = receipes_df['ingredients_numbers_x']
+tfidftr = vectorizer.fit_transform(corpustr).todense()
+tfidftr.shape
+
+clusters = 4
+kmeans = KMeans(n_clusters=clusters, random_state=0).fit(tfidftr)
+receipes_df['cluster'] = kmeans.labels_
+
+cuisine_df = receipes_df.groupby(['cuisine', 'cluster']).size().unstack(fill_value=0)
+cuisine_df.sum()
+
+vocabulary_text = [unique_ingredients[int(i)] for i in list(vectorizer.vocabulary_.keys())]
+centroids = kmeans.cluster_centers_
+
+#--------------------------------------------- GROCERIES BASKETS -------------------------------------------------
+GROCERIES_FILE = 'Data/groceries/groceries.csv'
+#Groceries dataset reading
+baskets = []
+with open(GROCERIES_FILE, 'r', encoding='utf-8') as groceries_file:
+    lines = groceries_file.read().splitlines()
+    baskets = [l.split(',') for l in lines]
+len(baskets)
+
+unique_items = {item for basket in baskets for item in basket}
+unique_items = list(unique_items)
+len(unique_items) #Includes all ingredients
+
+#TODO: This is comparing exact values (Use similarities to include similar e.g. bottled water = water)
+discarded_indexes = [item not in vocabulary_text for item in unique_items]
+discarded_items = [unique_items[i] for i in range(0,len(discarded_indexes)) if discarded_indexes[i] == True]
+kept_items = [unique_items[i] for i in range(0,len(discarded_indexes)) if discarded_indexes[i] == False]
+len(discarded_items) + len(kept_items) == len(discarded_indexes)
+
+#filter baskets with the receipes vocabulary
+filtered_baskets = []
+for basket in baskets:
+    filtered_basket = []
+    for item in basket:
+        if item in kept_items:
+            filtered_basket.append(item)
+    if filtered_basket:
+        filtered_baskets.append(filtered_basket)
+
+#apply the fitted TfidfVectorizer to the baskets
+#transform 
+basket_index = [' '.join([str(unique_ingredients.index(item)) for item in basket]) for basket in filtered_baskets]
+basket_tfidftr = vectorizer.transform(basket_index).todense() #No need to learn vocabulary
+
+#Compute euclidean distances against centroids
+distances = euclidean_distances(basket_tfidftr, centroids)
+distances.shape
+basket_labels = [np.argmin(b) for b in distances]
+np.unique(basket_labels)
+
+#Plot clustered baskets
+svd = TruncatedSVD(n_components=2)
+distances_reduced = svd.fit_transform(distances)
+x = [d[0] for d in distances_reduced]
+y = [d[1] for d in distances_reduced]
+plt.scatter(x, y, c=basket_labels)
+plt.show()
