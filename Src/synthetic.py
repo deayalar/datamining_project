@@ -1,4 +1,3 @@
-from load import load_groceries_data
 import random
 import math
 import numpy as np
