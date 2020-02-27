@@ -6,13 +6,16 @@ import pandas as pd
 import numpy as np
 import re
 
+import time
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.decomposition import TruncatedSVD
 
-RECEIPES_FILE = '../Data/recipe-ingredients-dataset/train.json'
-GROCERIES_FILE = '../Data/groceries/groceries.csv'
+from load import load_groceries_data
+
+from synthetic import generate_baskets
 
 def get_unique_ingredients(receipes):
     """Creates a list of unique ingredients based on a list of receipes
@@ -58,28 +61,10 @@ def get_tfidf_matrix(corpus):
 
 #TODO; Extend this method to allow other cluster algorithms
 def cluster_receipes(data, n_clusters=4):
-    kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(data)
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42).fit(data)
     return (kmeans.labels_, kmeans.cluster_centers_)
 
 #--------------------------------------------- GROCERIES BASKETS -------------------------------------------------
-def load_groceries_data(file):
-    """Load the groceries file, read the data and returns a list of baskets
-    Parameters
-    ----------
-    file : str
-        Groceries file path
-    Returns
-    -------
-    list
-        a list of baskets
-    """
-    baskets = []
-    with open(GROCERIES_FILE, 'r', encoding='utf-8') as groceries_file:
-        lines = groceries_file.read().splitlines()
-        baskets = [l.split(',') for l in lines]
-    print('Loaded %d baskets' % len(baskets))
-    return baskets
-
 def get_discarded_items(vocabulary, unique_items):
     #TODO: This is comparing exact values (Use similarities to include similar e.g. bottled water = water, whipped/sour cream = whiped sour cream) Use any simmilarity to improve this
     """Collect the items that are present in the vocabulary of ingredients from the receipes dataset
@@ -99,6 +84,7 @@ def get_discarded_items(vocabulary, unique_items):
     for i, discard in enumerate(discarded_indexes):
         t = discarded if discard == True else kept
         t.append(unique_items[i])
+    print('Intersection between unique items and ingredients: %d' % len(kept))
     return discarded, kept
 
 def get_filter_baskets(baskets, kept_items):
@@ -133,45 +119,55 @@ def plot2d(distances, basket_labels):
     distances_reduced = svd.fit_transform(distances)
     distances_reduced.shape
     x, y = zip(*distances_reduced)
-    plt.scatter(x, y, c=basket_labels)
+    plt.scatter(x, y, c=basket_labels, label=basket_labels)
+    plt.legend()
     plt.show()
 
 def plot3d(distances, basket_labels):
     #3D plot of clusters
-    svd = TruncatedSVD(n_components=3)
-    distances_reduced_3d = svd.fit_transform(distances)
-
+    #svd = TruncatedSVD(n_components=3)
+    #distances_reduced_3d = svd.fit_transform(distances)
+    distances_reduced_3d = distances
     distances_df = pd.DataFrame(distances_reduced_3d, columns=('x', 'y', 'z'))
     distances_df['cluster'] = basket_labels
 
     colors=['red', 'blue', 'green', 'yellow']
+    hr_labels = ['asian', 'english', 'western']
     fig = plt.figure()
     ax = fig.add_subplot(projection='3d')
     for i, cluster in distances_df.groupby('cluster'):
-        _ = ax.scatter(cluster['x'], cluster['y'], cluster['z'], c=colors[i], label=i)
+        _ = ax.scatter(cluster['x'], cluster['y'], cluster['z'], c=colors[i], label=hr_labels[i])
     ax.legend()
     plt.show()
 
-def main():
-    #Create a dataframe from receipes file
-    receipes_df = pd.read_json(RECEIPES_FILE)
+
+RECEIPES_FILE_TRAIN = '../Data/recipe-ingredients-dataset/train.json'
+RECEIPES_FILE_TEST = '../Data/recipe-ingredients-dataset/test.json'
+GROCERIES_FILE = '../Data/groceries/groceries.csv'
+#Create a dataframe from receipes file
+receipes_df = pd.read_json(RECEIPES_FILE_TRAIN).drop(['id'], axis=1)
+baskets = load_groceries_data(file=GROCERIES_FILE)
+unique_items = list({item for basket in baskets for item in basket})
+receipes_test_df = pd.read_json(RECEIPES_FILE_TEST)
+
+#receipes_df = pd.concat([receipes_df, receipes_test_df])
+#len(receipes_df)
+
+def recipes_clusters():
     unique_ingredients = get_unique_ingredients(receipes_df['ingredients'])
     receipes_df['ingredient_indexes'] = get_receipes_indexes(unique_ingredients, receipes_df['ingredients'])
     tfidf_matrix, vectorizer = get_tfidf_matrix(corpus=receipes_df['ingredient_indexes'])
-    receipes_df['cluster'], centroids = cluster_receipes(tfidf_matrix)
+    receipes_df['cluster'], centroids = cluster_receipes(tfidf_matrix, n_clusters=3)
+    return unique_ingredients, vectorizer, centroids
 
-    #This is just to validate that the cluster makes sense with cuisine types as reference, BUT cuisine is not considered in the algorithm
-    #cuisine_df = receipes_df.groupby(['cuisine', 'cluster']).size().unstack(fill_value=0)
-    #cuisine_df
-    #cuisine_df.sum()
-
-    vocabulary_text = [unique_ingredients[int(i)] for i in list(vectorizer.vocabulary_.keys())]
-    baskets = load_groceries_data(file=GROCERIES_FILE)
+def process_baskets(unique_ingredients, vectorizer, centroids):
     unique_items = list({item for basket in baskets for item in basket})
     #TODO Extract all this prints to a summary function
     print('There are %d unique items' % len(unique_items)) #Includes all items in baskets
+    vocabulary_text = [unique_ingredients[int(i)] for i in list(vectorizer.vocabulary_.keys())]
     discarded, kept = get_discarded_items(vocabulary_text, unique_items)
     filtered_baskets = get_filter_baskets(baskets, kept)
+    len(filtered_baskets)
 
     #apply the fitted TfidfVectorizer to the baskets with transform 
     basket_corpus = [' '.join([str(unique_ingredients.index(item)) for item in basket]) for basket in filtered_baskets]
@@ -180,9 +176,95 @@ def main():
     #Compute euclidean distances against centroids
     distances = euclidean_distances(basket_tfidf, centroids) # baskets x n_clusters
     basket_labels = [np.argmin(b) for b in distances]
-    #np.unique(basket_labels)
-    plot2d(distances, basket_labels)
-    plot3d(distances, basket_labels)
+    len(basket_labels)
+    return distances, basket_labels
 
-if __name__== "__main__":
-  main()
+start = time.time()
+unique_ingredients, vectorizer, centroids = recipes_clusters()
+distances, basket_labels = process_baskets(unique_ingredients, vectorizer, centroids)
+end = time.time()
+print(end - start)
+
+plot3d(distances, basket_labels)
+
+#With Synthetic data -> Use test recipes
+times = {}
+for i in range(0, 10):
+    print(i)
+    start = time.time()
+    unique_ingredients, vectorizer, centroids = recipes_clusters()
+    process_baskets(unique_ingredients, vectorizer, centroids)
+    end = time.time()
+    elapsed = end - start
+    print(len(receipes_df))
+    print(elapsed)
+    times[str(len(receipes_df))] = elapsed
+    receipes_df = pd.concat([receipes_df, receipes_test_df])
+from matplotlib.pyplot import figure
+plt.figure(num=None, figsize=(8, 6), dpi=80, facecolor='w', edgecolor='k')
+
+plt.plot(list(times.keys()), list(times.values()), '')
+plt.xlabel('Number of recipes')
+plt.ylabel('Time (s)')
+plt.show()
+
+#With Synthetic data -> Generate synthetic baskets
+times = {}
+for i in range(0,1000000,100000):
+    print(i)
+    new_baskets = generate_baskets(items = unique_items, num_baskets = i)
+    baskets.extend(new_baskets)
+    start = time.time()
+    unique_ingredients, vectorizer, centroids = recipes_clusters()
+    process_baskets(unique_ingredients, vectorizer, centroids)
+    end = time.time()
+    elapsed = end - start
+    print(len(baskets))
+    print(elapsed)
+    times[str(len(baskets))] = elapsed
+
+from matplotlib.pyplot import figure
+plt.figure(num=None, figsize=(8, 6), dpi=80, facecolor='w', edgecolor='k')
+
+plt.plot(list(times.keys()), list(times.values()), '')
+plt.xlabel('Number of baskets')
+plt.ylabel('Time (s)')
+plt.show()
+
+#This is just to validate that the cluster makes sense with cuisine types as reference, BUT cuisine is not considered in the algorithm
+#def compare_cuisine():
+#    cuisine_df = receipes_df.groupby(['cuisine', 'cluster']).size().unstack(fill_value=0)
+#    cuisine_df['label'] = cuisine_df.idxmax(axis=1)
+#    cuisine_df
+
+#    print(cuisine_df[cuisine_df['label'] == 0]['label'])
+#    print(cuisine_df[cuisine_df['label'] == 1]['label'])
+#    print(cuisine_df[cuisine_df['label'] == 2]['label'])
+
+#    fig = plt.figure()
+#    ax = fig.add_subplot(projection='3d')
+#    colors=['red', 'blue', 'green', 'yellow']
+#    hr_labels = ['asian', 'english', 'western']
+#    for i in range(0,3):
+#        ax.scatter(cuisine_df[cuisine_df['label'] == i][0], cuisine_df[cuisine_df['label'] == i][1],cuisine_df[cuisine_df['label'] == i][2], c=colors[i], label=hr_labels[i])
+#    ax.legend()
+#    plt.show()
+
+#compare_cuisine()
+##################################################
+
+
+#np.unique(basket_labels)
+#plot2d(distances, basket_labels)
+
+
+#Baseline algorithm
+vectorizer2 = TfidfVectorizer(analyzer="word", binary=False , token_pattern=r'\w+' , sublinear_tf=False)
+basket_corpus2 = [' '.join([item for item in basket]) for basket in baskets]
+tfidf_bl = vectorizer2.fit_transform(baskets).todense()
+
+
+# Find the average size of baskets
+receipes_df['lenght'] = receipes_df.apply(lambda x: len(x['ingredients']), axis=1)
+avg_lenght = receipes_df['lenght'].mean()
+
