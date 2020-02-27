@@ -3,7 +3,7 @@ Data Mining Project 19/20 Unitn
 
 This repository contains the final artifacts of the
 project of Data Mining for the academic year
-2019/2020 at Unitn. 
+2019/2020 at the University of Trento. 
 
 This project is based on two unrelated
 datasets from Kaggle competences. The first dataset
